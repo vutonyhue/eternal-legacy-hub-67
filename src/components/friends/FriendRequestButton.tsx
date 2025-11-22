@@ -1,0 +1,181 @@
+import { useState, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { UserPlus, UserMinus, UserCheck, Clock } from "lucide-react";
+import { toast } from "sonner";
+
+interface FriendRequestButtonProps {
+  userId: string;
+  currentUserId: string;
+}
+
+type FriendshipStatus = "none" | "pending_sent" | "pending_received" | "accepted";
+
+export const FriendRequestButton = ({ userId, currentUserId }: FriendRequestButtonProps) => {
+  const [status, setStatus] = useState<FriendshipStatus>("none");
+  const [loading, setLoading] = useState(false);
+  const [friendshipId, setFriendshipId] = useState<string | null>(null);
+
+  useEffect(() => {
+    checkFriendshipStatus();
+    
+    // Set up realtime subscription for friendships
+    const channel = supabase
+      .channel('friendship-status-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'friendships',
+          filter: `requester_id=eq.${currentUserId},addressee_id=eq.${userId}`
+        },
+        () => {
+          checkFriendshipStatus();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'friendships',
+          filter: `requester_id=eq.${userId},addressee_id=eq.${currentUserId}`
+        },
+        () => {
+          checkFriendshipStatus();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId, currentUserId]);
+
+  const checkFriendshipStatus = async () => {
+    const { data, error } = await supabase
+      .from("friendships")
+      .select("id, requester_id, addressee_id, status")
+      .or(`and(requester_id.eq.${currentUserId},addressee_id.eq.${userId}),and(requester_id.eq.${userId},addressee_id.eq.${currentUserId})`)
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error checking friendship:", error);
+      return;
+    }
+
+    if (!data) {
+      setStatus("none");
+      setFriendshipId(null);
+    } else {
+      setFriendshipId(data.id);
+      if (data.status === "accepted") {
+        setStatus("accepted");
+      } else if (data.requester_id === currentUserId) {
+        setStatus("pending_sent");
+      } else {
+        setStatus("pending_received");
+      }
+    }
+  };
+
+  const sendFriendRequest = async () => {
+    setLoading(true);
+    const { error } = await supabase
+      .from("friendships")
+      .insert({
+        requester_id: currentUserId,
+        addressee_id: userId,
+        status: "pending"
+      });
+
+    if (error) {
+      toast.error("Failed to send friend request");
+      console.error(error);
+    } else {
+      toast.success("Friend request sent!");
+      checkFriendshipStatus();
+    }
+    setLoading(false);
+  };
+
+  const acceptFriendRequest = async () => {
+    if (!friendshipId) return;
+    setLoading(true);
+    const { error } = await supabase
+      .from("friendships")
+      .update({ status: "accepted" })
+      .eq("id", friendshipId);
+
+    if (error) {
+      toast.error("Failed to accept friend request");
+      console.error(error);
+    } else {
+      toast.success("Friend request accepted!");
+      checkFriendshipStatus();
+    }
+    setLoading(false);
+  };
+
+  const removeFriend = async () => {
+    if (!friendshipId) return;
+    setLoading(true);
+    const { error } = await supabase
+      .from("friendships")
+      .delete()
+      .eq("id", friendshipId);
+
+    if (error) {
+      toast.error("Failed to remove friend");
+      console.error(error);
+    } else {
+      toast.success("Friend removed");
+      checkFriendshipStatus();
+    }
+    setLoading(false);
+  };
+
+  if (status === "none") {
+    return (
+      <Button onClick={sendFriendRequest} disabled={loading} size="sm">
+        <UserPlus className="w-4 h-4 mr-2" />
+        Add Friend
+      </Button>
+    );
+  }
+
+  if (status === "pending_sent") {
+    return (
+      <Button variant="outline" disabled size="sm">
+        <Clock className="w-4 h-4 mr-2" />
+        Request Sent
+      </Button>
+    );
+  }
+
+  if (status === "pending_received") {
+    return (
+      <div className="flex gap-2">
+        <Button onClick={acceptFriendRequest} disabled={loading} size="sm">
+          <UserCheck className="w-4 h-4 mr-2" />
+          Accept
+        </Button>
+        <Button onClick={removeFriend} disabled={loading} variant="outline" size="sm">
+          Reject
+        </Button>
+      </div>
+    );
+  }
+
+  if (status === "accepted") {
+    return (
+      <Button onClick={removeFriend} disabled={loading} variant="outline" size="sm">
+        <UserMinus className="w-4 h-4 mr-2" />
+        Unfriend
+      </Button>
+    );
+  }
+
+  return null;
+};
