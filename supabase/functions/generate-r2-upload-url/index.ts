@@ -23,9 +23,7 @@ Deno.serve(async (req) => {
         accessKeyId: Deno.env.get('R2_ACCESS_KEY_ID')!,
         secretAccessKey: Deno.env.get('R2_SECRET_ACCESS_KEY')!,
       },
-      // Prevent AWS SDK from trying to load config from filesystem
-      maxAttempts: 1,
-      requestHandler: undefined,
+      forcePathStyle: true,
     });
 
     const key = `${folder}/${fileName}`;
